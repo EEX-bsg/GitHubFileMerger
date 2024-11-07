@@ -554,11 +554,10 @@
         }
 
         // ファイル一覧を再帰的に取得する関数
-        async function fetchFileContent(owner, repo, path, branch) {
+        async function fetchFiles(owner, repo, branch, path = '') {
             if (!githubToken) {
                 throw new Error('GitHubトークンが設定されていません。先にトークンを入力して検証してください。');
             }
-
             try {
                 const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${branch}`, {
                     headers: {
@@ -566,22 +565,32 @@
                         'Accept': 'application/vnd.github.v3+json'
                     }
                 });
+                if (!response.ok) throw new Error('ファイルの取得に失敗しました');
+                const contents = await response.json();
 
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
+                let files = [];
+                for (const item of contents) {
+                    if (item.type === 'file') {
+                        files.push({
+                            path: item.path,
+                            download_url: item.download_url
+                        });
+                    } else if (item.type === 'dir') {
+                        const subFiles = await fetchFiles(owner, repo, branch, item.path);
+                        files = files.concat(subFiles);
+                    }
                 }
-
-                const data = await response.json();
-                const content = atob(data.content);
-                return content;
-            } catch (error) {
-                console.error(`Error fetching file ${path}:`, error);
-                throw error;
+                return files;
+            } catch (e) {
+                throw new Error('ファイルの取得に失敗しました: ' + e.message);
             }
         }
 
         // ファイルの内容を取得する関数
         async function fetchFileContent(url) {
+            if (!githubToken) {
+                throw new Error('GitHubトークンが設定されていません。先にトークンを入力して検証してください。');
+            }
             try {
                 const response = await fetch(url, {
                     headers: {
