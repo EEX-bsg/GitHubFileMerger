@@ -573,7 +573,6 @@
                     if (item.type === 'file') {
                         files.push({
                             path: item.path,
-                            download_url: item.download_url
                         });
                     } else if (item.type === 'dir') {
                         const subFiles = await fetchFiles(owner, repo, branch, item.path);
@@ -587,21 +586,23 @@
         }
 
         // ファイルの内容を取得する関数
-        async function fetchFileContent(url) {
+        async function fetchFileContent(owner, repo, path, branch) {
             if (!githubToken) {
                 throw new Error('GitHubトークンが設定されていません。先にトークンを入力して検証してください。');
             }
             try {
-                const response = await fetch(url, {
+                const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${branch}`, {
                     headers: {
                         'Authorization': `token ${githubToken}`,
                         'Accept': 'application/vnd.github.v3+json'
                     }
                 });
                 if (!response.ok) throw new Error('ファイル内容の取得に失敗しました');
-                return await response.text();
+                const data = await response.json();
+                // Base64でエンコードされたコンテンツをデコード
+                return atob(data.content);
             } catch (e) {
-                throw new Error(`ファイル内容の取得に失敗しました (${url}): ${e.message}`);
+                throw new Error(`ファイル内容の取得に失敗しました (${path}): ${e.message}`);
             }
         }
 
@@ -834,6 +835,9 @@
                 copyButton.disabled = true;
                 downloadButton.disabled = true;
 
+                const repoInfo = parseGitHubUrl(repoUrlInput.value.trim());
+                const branch = branchSelect.value;
+
                 let mergedContent = '';
                 for (const file of files) {
                     mergedContent += `\n/*====================================================================================\n FILE: ${file.path}\n====================================================================================*/\n\n`;
@@ -841,7 +845,7 @@
                     if (binaryFiles.has(file.path)) {
                         mergedContent += `/* バイナリファイルの為、内容は省略されました */\n`;
                     } else {
-                        const content = await fetchFileContent(file.download_url);
+                        const content = await fetchFileContent(repoInfo.owner, repoInfo.repo, file.path, branch);
                         mergedContent += content + '\n';
                     }
                 }
