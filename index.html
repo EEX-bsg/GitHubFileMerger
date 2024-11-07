@@ -295,7 +295,8 @@
             <div>
                 GitHubトークン:
                 <div class="token-input-container">
-                    <input type="password" autocomplete="new-password" id="githubToken" placeholder="Personal Access Token" class="token-input" />
+                    <input type="password" autocomplete="new-password" id="githubToken"
+                        placeholder="Personal Access Token" class="token-input" />
                     <button onclick="validateToken()" class="validate-token-btn">
                         トークンを検証
                     </button>
@@ -434,18 +435,30 @@
             try {
                 const response = await fetch('https://api.github.com/user', {
                     headers: {
-                        'Authorization': `token ${token}`
+                        'Authorization': `token ${token}`,
+                        'Accept': 'application/vnd.github.v3+json'
                     }
                 });
 
-                if (response.ok) {
-                    const data = await response.json();
-                    statusElement.textContent = `認証成功: ${data.login}として認証されました`;
-                    statusElement.className = 'token-status success';
-                    // 通常の変数に保存
-                    githubToken = token;
-                } else {
-                    statusElement.textContent = 'トークンが無効です';
+                if (response.status === 401) {
+                    statusElement.textContent = 'トークンが無効か、権限が不足しています';
+                    statusElement.className = 'token-status error';
+                    return;
+                }
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+                statusElement.textContent = `認証成功: ${data.login}として認証されました`;
+                statusElement.className = 'token-status success';
+                githubToken = token;
+
+                // トークンのスコープを確認
+                const scopes = response.headers.get('x-oauth-scopes');
+                if (!scopes || !scopes.includes('repo')) {
+                    statusElement.textContent = '警告: このトークンにはリポジトリへのアクセス権限（repo）が必要です';
                     statusElement.className = 'token-status error';
                 }
             } catch (error) {
@@ -474,6 +487,9 @@
 
         // ブランチ一覧を取得する関数
         async function fetchBranches(owner, repo) {
+            if (!githubToken) {
+                throw new Error('GitHubトークンが設定されていません。先にトークンを入力して検証してください。');
+            }
             try {
                 const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/branches`, {
                     headers: {
@@ -538,7 +554,11 @@
         }
 
         // ファイル一覧を再帰的に取得する関数
-        async function fetchFiles(owner, repo, branch, path = '') {
+        async function fetchFileContent(owner, repo, path, branch) {
+            if (!githubToken) {
+                throw new Error('GitHubトークンが設定されていません。先にトークンを入力して検証してください。');
+            }
+
             try {
                 const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${branch}`, {
                     headers: {
@@ -546,24 +566,17 @@
                         'Accept': 'application/vnd.github.v3+json'
                     }
                 });
-                if (!response.ok) throw new Error('ファイルの取得に失敗しました');
-                const contents = await response.json();
 
-                let files = [];
-                for (const item of contents) {
-                    if (item.type === 'file') {
-                        files.push({
-                            path: item.path,
-                            download_url: item.download_url
-                        });
-                    } else if (item.type === 'dir') {
-                        const subFiles = await fetchFiles(owner, repo, branch, item.path);
-                        files = files.concat(subFiles);
-                    }
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
                 }
-                return files;
-            } catch (e) {
-                throw new Error('ファイルの取得に失敗しました: ' + e.message);
+
+                const data = await response.json();
+                const content = atob(data.content);
+                return content;
+            } catch (error) {
+                console.error(`Error fetching file ${path}:`, error);
+                throw error;
             }
         }
 
@@ -596,34 +609,34 @@
         }
 
         // .gitignoreパターンに一致するかチェックする関数
-        async function shouldIgnoreFile(filePath, owner, repo, branch) {
-            if (!ignoreGitignoreCheckbox.checked) return false;
+        // async function shouldIgnoreFile(filePath, owner, repo, branch) {
+        //     if (!ignoreGitignoreCheckbox.checked) return false;
 
-            try {
-                // .gitignoreファイルの取得を試みる
-                const gitignoreUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/.gitignore`;
-                const response = await fetch(gitignoreUrl);
-                if (!response.ok) return false;
+        //     try {
+        //         // .gitignoreファイルの取得を試みる
+        //         const gitignoreUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/.gitignore`;
+        //         const response = await fetch(gitignoreUrl);
+        //         if (!response.ok) return false;
 
-                const gitignoreContent = await response.text();
-                const patterns = gitignoreContent
-                    .split('\n')
-                    .map(line => line.trim())
-                    .filter(line => line && !line.startsWith('#'));
+        //         const gitignoreContent = await response.text();
+        //         const patterns = gitignoreContent
+        //             .split('\n')
+        //             .map(line => line.trim())
+        //             .filter(line => line && !line.startsWith('#'));
 
-                // 単純なパターンマッチング（完全一致とワイルドカード）
-                return patterns.some(pattern => {
-                    const regexPattern = pattern
-                        .replace(/\*/g, '.*')
-                        .replace(/\?/g, '.');
-                    const regex = new RegExp(`^${regexPattern}$`);
-                    return regex.test(filePath);
-                });
-            } catch (e) {
-                console.warn('Failed to fetch .gitignore:', e);
-                return false;
-            }
-        }
+        //         // 単純なパターンマッチング（完全一致とワイルドカード）
+        //         return patterns.some(pattern => {
+        //             const regexPattern = pattern
+        //                 .replace(/\*/g, '.*')
+        //                 .replace(/\?/g, '.');
+        //             const regex = new RegExp(`^${regexPattern}$`);
+        //             return regex.test(filePath);
+        //         });
+        //     } catch (e) {
+        //         console.warn('Failed to fetch .gitignore:', e);
+        //         return false;
+        //     }
+        // }
 
         // ファイルリストを表示する関数
         function displayFileList(files, ignoredFiles, binaryFiles) {
@@ -687,27 +700,27 @@
         }
 
         // .gitignoreの存在チェックと有効化の処理を追加
-        async function checkGitignoreExists(owner, repo, branch) {
-            try {
-                const gitignoreUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/.gitignore`;
-                const response = await fetch(gitignoreUrl);
-                const exists = response.ok;
-                ignoreGitignoreCheckbox.disabled = !exists;
-                if (!exists) {
-                    ignoreGitignoreCheckbox.checked = false;
-                    ignoreGitignoreCheckbox.title = ".gitignoreファイルが存在しません";
-                } else {
-                    ignoreGitignoreCheckbox.title = "";
-                }
-                return exists;
-            } catch (e) {
-                console.warn('Failed to check .gitignore:', e);
-                ignoreGitignoreCheckbox.disabled = true;
-                ignoreGitignoreCheckbox.checked = false;
-                ignoreGitignoreCheckbox.title = ".gitignoreファイルの確認に失敗しました";
-                return false;
-            }
-        }
+        // async function checkGitignoreExists(owner, repo, branch) {
+        //     try {
+        //         const gitignoreUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/.gitignore`;
+        //         const response = await fetch(gitignoreUrl);
+        //         const exists = response.ok;
+        //         ignoreGitignoreCheckbox.disabled = !exists;
+        //         if (!exists) {
+        //             ignoreGitignoreCheckbox.checked = false;
+        //             ignoreGitignoreCheckbox.title = ".gitignoreファイルが存在しません";
+        //         } else {
+        //             ignoreGitignoreCheckbox.title = "";
+        //         }
+        //         return exists;
+        //     } catch (e) {
+        //         console.warn('Failed to check .gitignore:', e);
+        //         ignoreGitignoreCheckbox.disabled = true;
+        //         ignoreGitignoreCheckbox.checked = false;
+        //         ignoreGitignoreCheckbox.title = ".gitignoreファイルの確認に失敗しました";
+        //         return false;
+        //     }
+        // }
 
         // URLの入力イベントリスナー
         repoUrlInput.addEventListener('input', (e) => {
@@ -759,16 +772,16 @@
                 const processableFiles = [];
 
                 // .gitignoreの存在確認
-                await checkGitignoreExists(repoInfo.owner, repoInfo.repo, branch);
+                // await checkGitignoreExists(repoInfo.owner, repoInfo.repo, branch);
 
                 // ファイルの仕分け
                 for (const file of files) {
                     if (!isInTargetFolder(file.path, targetFolder)) continue;
 
-                    if (ignoreGitignoreCheckbox.checked && await shouldIgnoreFile(file.path, repoInfo.owner, repoInfo.repo, branch)) {
-                        ignoredFiles.add(file.path);
-                        continue;
-                    }
+                    // if (ignoreGitignoreCheckbox.checked && await shouldIgnoreFile(file.path, repoInfo.owner, repoInfo.repo, branch)) {
+                    //     ignoredFiles.add(file.path);
+                    //     continue;
+                    // }
 
                     if (skipBinaryCheckbox.checked && isBinaryFile(file.path)) {
                         binaryFiles.add(file.path);
